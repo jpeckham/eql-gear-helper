@@ -43,6 +43,7 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
@@ -69,16 +70,31 @@
 
                     <TextBlock x:Name="StatusTextBlock"
                                Grid.Row="1"
-                               Margin="0,10,0,10"
+                               Margin="0,10,0,8"
                                Text="Choose an inventory file to begin." />
 
-                    <ScrollViewer Grid.Row="2">
+                    <StackPanel Grid.Row="2" Margin="0,0,0,10">
+                        <TextBlock Text="How to use this tab:"
+                                   FontWeight="SemiBold"
+                                   Margin="0,0,0,4" />
+                        <TextBlock Text="• In-game, type '/outputfile inventory'."
+                                   TextWrapping="Wrap"
+                                   Margin="8,0,0,0" />
+                        <TextBlock Text="• Open your EQ folder and locate the generated file."
+                                   TextWrapping="Wrap"
+                                   Margin="8,2,0,0" />
+                        <TextBlock Text="• Click Browse, select the inventory file (for example CharacterName_serverName-inventory.txt), then click Analyze."
+                                   TextWrapping="Wrap"
+                                   Margin="8,2,0,0" />
+                    </StackPanel>
+
+                    <ScrollViewer Grid.Row="3">
                         <StackPanel x:Name="InventoryResultsPanel"
                                     Margin="2" />
                     </ScrollViewer>
 
-                    <TextBlock Grid.Row="3"
-                               Text="Tip: inventory file is usually in EverQuest Legends installation folder and ends with -inventory.txt." />
+                    <TextBlock Grid.Row="4"
+                               Text="Analysis scope: equipped, inventory bags, and bank bags are scanned. Storage and Dragon's Hoard are not included in this analysis." />
                 </Grid>
             </TabItem>
         </TabControl>
