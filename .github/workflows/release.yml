@@ -1,0 +1,62 @@
+name: Release WPF App
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    env:
+      PROJECT_PATH: eql-gear-helper.csproj
+      RUNTIME_ID: win-x64
+      APP_NAME: eql-gear-helper
+      ZIP_NAME: eql-gear-helper-win-x64
+      OUTPUT_DIR: artifacts
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Publish app
+        run: |
+          New-Item -ItemType Directory -Path "${{ env.OUTPUT_DIR }}" -Force | Out-Null
+          dotnet publish "${{ env.PROJECT_PATH }}" `
+            -c Release `
+            -r "${{ env.RUNTIME_ID }}" `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:SelfContained=true `
+            -o "${{ env.OUTPUT_DIR }}\publish"
+
+      - name: Package zip artifact
+        id: package
+        shell: pwsh
+        run: |
+          $runNumber = "${{ github.run_number }}"
+          $tag = "release-${runNumber}"
+          $zipPath = "${{ github.workspace }}\${{ env.OUTPUT_DIR }}\${{ env.ZIP_NAME }}-${runNumber}.zip"
+          Compress-Archive -Path "${{ github.workspace }}\${{ env.OUTPUT_DIR }}\publish\*" -DestinationPath $zipPath -Force
+          "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "ZIP_PATH=$zipPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: EQL Gear Helper ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          body: |
+            Automated release for commit `${{ github.sha }}`.
+          files: ${{ env.ZIP_PATH }}

@@ -1,0 +1,86 @@
+<Window x:Class="MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="EQL Gear Helper"
+        Height="780"
+        Width="1050"
+        WindowStartupLocation="CenterScreen">
+    <Grid Margin="12">
+        <TabControl>
+            <TabItem Header="Item lookup">
+                <Grid Margin="8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <StackPanel Orientation="Horizontal" Grid.Row="0">
+                        <TextBlock Text="Item name:"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold" />
+                        <TextBox x:Name="ItemQueryTextBox"
+                                 Width="640"
+                                 Margin="8,0,4,0" />
+                        <Button x:Name="SearchButton"
+                                Content="Search"
+                                Width="90"
+                                Margin="0,0,4,0"
+                                Click="SearchButton_Click" />
+                    </StackPanel>
+                    <TextBlock x:Name="ItemStatusTextBlock"
+                               Grid.Row="1"
+                               Margin="0,10,0,8"
+                               Text="Enter an item name and click Search." />
+                    <ScrollViewer Grid.Row="2">
+                        <StackPanel x:Name="ItemResultsPanel"
+                                    Margin="2" />
+                    </ScrollViewer>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Inventory analysis">
+                <Grid Margin="8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <StackPanel Orientation="Horizontal" Grid.Row="0">
+                        <TextBlock Text="Inventory file:"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold" />
+                        <TextBox x:Name="InventoryPathTextBox"
+                                 Width="700"
+                                 IsReadOnly="True"
+                                 Margin="8,0,4,0"
+                                 HorizontalScrollBarVisibility="Auto" />
+                        <Button Content="Browse"
+                                Width="90"
+                                Margin="0,0,4,0"
+                                Click="BrowseButton_Click" />
+                        <Button x:Name="AnalyzeButton"
+                                Content="Analyze"
+                                Width="90"
+                                IsEnabled="False"
+                                Click="AnalyzeButton_Click" />
+                    </StackPanel>
+
+                    <TextBlock x:Name="StatusTextBlock"
+                               Grid.Row="1"
+                               Margin="0,10,0,10"
+                               Text="Choose an inventory file to begin." />
+
+                    <ScrollViewer Grid.Row="2">
+                        <StackPanel x:Name="InventoryResultsPanel"
+                                    Margin="2" />
+                    </ScrollViewer>
+
+                    <TextBlock Grid.Row="3"
+                               Text="Tip: inventory file is usually in EverQuest Legends installation folder and ends with -inventory.txt." />
+                </Grid>
+            </TabItem>
+        </TabControl>
+    </Grid>
+</Window>
