@@ -259,7 +259,8 @@ public partial class MainWindow : Window, IItemLookupView, IInventoryAnalysisVie
                 Margin = new Thickness(0, 0, 0, 8)
             };
 
-            AddTextLine(classRow, classScore.ClassName, isBold: true, margin: new Thickness(0, 0, 0, 3));
+            var classLabel = classScore.ClassName;
+            AddTextLine(classRow, classLabel, isBold: true, margin: new Thickness(0, 0, 0, 3));
             var classScoreBrush = GetQualityBrush(classScore.CompositeScore, higherIsBetter: true);
             var classScorePanel = new System.Windows.Controls.StackPanel
             {
@@ -293,10 +294,28 @@ public partial class MainWindow : Window, IItemLookupView, IInventoryAnalysisVie
             classScorePanel.Children.Add(classScoreText);
             classRow.Children.Add(classScorePanel);
 
+            if (!string.IsNullOrWhiteSpace(classScore.ContextLabel))
+            {
+                AddTextLine(
+                    classRow,
+                    classScore.ContextLabel,
+                    margin: new Thickness(6, 0, 0, 2),
+                    foreground: SystemColors.GrayTextBrush);
+            }
+
             var betterText = string.IsNullOrWhiteSpace(classScore.BetterItem)
-                ? "Better option: none"
+                ? "No better item found"
                 : $"Better option: {classScore.BetterItem}";
             AddTextLine(classRow, betterText, margin: new Thickness(6, 2, 0, 0), foreground: classScoreBrush);
+
+            if (classScore.IsCurrentBestInInventory)
+            {
+                AddTextLine(
+                    classRow,
+                    "Current best in your inventory",
+                    margin: new Thickness(6, 0, 0, 0),
+                    foreground: SystemColors.GrayTextBrush);
+            }
 
             detailsRoot.Children.Add(classRow);
         }

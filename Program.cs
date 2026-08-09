@@ -468,8 +468,16 @@ static async Task<List<GearRow>> LoadClassRowsAsync(
 static List<GearRow> SortRowsForRanking(string className, IReadOnlyList<GearRow> rows)
 {
     return rows
-        .OrderByDescending(row => GetClassWeightedScore(row, className))
-        .ThenBy(row => NormalizeQuery(row.Name))
+        .Select(row => new
+        {
+            Row = row,
+            Score = GetClassWeightedScore(row, className),
+            HasPrimaryStatMatch = HasPrimaryClassStatMatch(row, className)
+        })
+        .OrderByDescending(entry => entry.HasPrimaryStatMatch)
+        .ThenByDescending(entry => entry.Score)
+        .ThenBy(entry => NormalizeQuery(entry.Row.Name))
+        .Select(entry => entry.Row)
         .ToList();
 }
 
@@ -497,8 +505,16 @@ static Dictionary<string, Dictionary<string, List<GearRow>>> BuildSlotSortedList
         foreach (var slot in slotGroups.Keys.ToList())
         {
             slotGroups[slot] = slotGroups[slot]
-                .OrderByDescending(row => GetClassWeightedScore(row, className))
-                .ThenBy(row => NormalizeQuery(row.Name))
+                .Select(row => new
+                {
+                    Row = row,
+                    Score = GetClassWeightedScore(row, className),
+                    HasPrimaryStatMatch = HasPrimaryClassStatMatch(row, className)
+                })
+                .OrderByDescending(entry => entry.HasPrimaryStatMatch)
+                .ThenByDescending(entry => entry.Score)
+                .ThenBy(entry => NormalizeQuery(entry.Row.Name))
+                .Select(entry => entry.Row)
                 .ToList();
         }
 
@@ -591,6 +607,22 @@ static int FindRank(IReadOnlyList<GearRow> sortedRows, string normalizedName, St
     return 0;
 }
 
+static int FindWeaponRank(
+    IReadOnlyList<WeaponMatch> sortedRows,
+    string normalizedName,
+    StringComparer comparer)
+{
+    for (var index = 0; index < sortedRows.Count; index++)
+    {
+        if (comparer.Equals(sortedRows[index].NormalizedName, normalizedName))
+        {
+            return index + 1;
+        }
+    }
+
+    return 0;
+}
+
 static void PrintMatchReport(
     MatchReport report,
     Dictionary<string, Dictionary<string, List<GearRow>>> slotSortedByClass)
@@ -641,7 +673,8 @@ static void PrintMatchReport(
 
 static ItemLookupMatchSummary BuildItemLookupMatchSummary(
     MatchReport report,
-    Dictionary<string, Dictionary<string, List<GearRow>>> slotSortedByClass)
+    Dictionary<string, Dictionary<string, List<GearRow>>> slotSortedByClass,
+    HashSet<string>? ownedNormalizedNames = null)
 {
     var item = report.Item;
     var classSummaryLines = report.MatchesByClass
@@ -666,7 +699,12 @@ static ItemLookupMatchSummary BuildItemLookupMatchSummary(
                 .Select(slot => new
                 {
                     Slot = slot.Slot,
-                    Hint = TryGetBetterSlotReplacement(classEntry.Key, report.NormalizedName, slot, slotSortedByClass)
+                    Hint = TryGetBetterSlotReplacement(
+                        classEntry.Key,
+                        report.NormalizedName,
+                        slot,
+                        slotSortedByClass,
+                        ownedNormalizedNames)
                 })
                 .Where(item => !string.IsNullOrWhiteSpace(item.Hint))
                 .Select(item => $"Better for {classEntry.Key} {item.Slot}: {item.Hint}")))
@@ -677,13 +715,18 @@ static ItemLookupMatchSummary BuildItemLookupMatchSummary(
     var classCompositeScores = report.MatchesByClass
         .OrderBy(entry => entry.Key)
         .Select(classEntry => BuildClassCompositeScore(
+            report.Item,
             classEntry.Key,
             classEntry.Value,
             report.NormalizedName,
-            slotSortedByClass))
+            slotSortedByClass,
+            ownedNormalizedNames))
         .Where(summary => summary is not null)
         .Cast<ClassCompositeScore>()
         .ToList();
+
+    var contextualizedScores = ApplyClassFitContext(classCompositeScores);
+    var displayClassScores = BuildOtherClassCompositeScore(contextualizedScores);
 
     var qualityPercentile = CalculateCompositeItemPercentile(report);
 
@@ -697,26 +740,191 @@ static ItemLookupMatchSummary BuildItemLookupMatchSummary(
         GetItemQualityLabel(qualityPercentile),
         classSummaryLines,
         betterSlotHints,
-        classCompositeScores);
+        displayClassScores);
+}
+
+static List<ClassCompositeScore> BuildOtherClassCompositeScore(IReadOnlyList<ClassCompositeScore> classCompositeScores)
+{
+    var result = classCompositeScores.OrderBy(score => score.ClassName).ToList();
+    if (result.Count < 3)
+    {
+        return result;
+    }
+
+    var directClassScores = result.Where(score => score.IsDirectClassFit).ToList();
+    var scorePool = directClassScores.Count > 0 ? directClassScores : result;
+    var topThree = scorePool
+        .OrderByDescending(score => score.CompositeScore)
+        .Take(3)
+        .ToList();
+
+    var bestForUnknownClass = topThree
+        .OrderByDescending(score => score.CompositeScore)
+        .First();
+
+    var bestReplacementHint = topThree
+        .Where(score => !string.IsNullOrWhiteSpace(score.BetterItem))
+        .OrderByDescending(score => score.CompositeScore)
+        .FirstOrDefault();
+
+    var isCurrentBest = topThree.All(score => score.IsCurrentBestInInventory);
+    var topClasses = string.Join(", ", topThree.Select(score => score.ClassName));
+    var context = directClassScores.Count > 0
+        ? $"Useful if your 3-class setup includes at least one of: {topClasses}"
+        : $"Only class-matched by fallback stats; use as a low-confidence option only.";
+    var otherScore = new ClassCompositeScore(
+        "Any 3-class setup",
+        100.0 - bestForUnknownClass.CompositeScore,
+        bestReplacementHint?.BetterItem,
+        isCurrentBest,
+        context);
+
+    result.Insert(0, otherScore);
+    return result;
 }
 
 static ClassCompositeScore? BuildClassCompositeScore(
+    GearRow item,
     string className,
     IReadOnlyList<ClassFit> fits,
     string normalizedName,
-    Dictionary<string, Dictionary<string, List<GearRow>>> slotSortedByClass)
+    Dictionary<string, Dictionary<string, List<GearRow>>> slotSortedByClass,
+    HashSet<string>? ownedNormalizedNames = null)
 {
-    var bestScore = double.PositiveInfinity;
+    var (bestScore, bestSlotFit) = ResolveClassBestFit(fits);
+
+    if (double.IsPositiveInfinity(bestScore))
+    {
+        return null;
+    }
+
+    var hasPrimaryClassFit = HasPrimaryClassStatMatch(item, className);
+    string? betterItem = null;
+    if (bestSlotFit is not null)
+    {
+        betterItem = TryGetBetterSlotReplacement(
+            className,
+            normalizedName,
+            bestSlotFit,
+            slotSortedByClass,
+            ownedNormalizedNames);
+    }
+
+    var isCurrentBestInInventory = false;
+    if (ownedNormalizedNames is not null)
+    {
+        isCurrentBestInInventory = !HasBetterOwnedSlotReplacement(className, normalizedName, fits, slotSortedByClass, ownedNormalizedNames);
+    }
+
+    if (isCurrentBestInInventory && !string.IsNullOrWhiteSpace(betterItem))
+    {
+        isCurrentBestInInventory = false;
+    }
+
+    return new ClassCompositeScore(className, bestScore, betterItem, isCurrentBestInInventory, isDirectClassFit: hasPrimaryClassFit);
+}
+
+static List<ClassCompositeScore> ApplyClassFitContext(IReadOnlyList<ClassCompositeScore> classCompositeScores)
+{
+    var primaryClassNames = classCompositeScores
+        .Where(score => score.IsDirectClassFit)
+        .Select(score => score.ClassName)
+        .OrderBy(className => className)
+        .ToList();
+
+    var directClassHint = primaryClassNames.Count > 0
+        ? string.Join(", ", primaryClassNames)
+        : string.Empty;
+
+    var contextualized = new List<ClassCompositeScore>(classCompositeScores.Count);
+    foreach (var score in classCompositeScores.OrderBy(score => score.ClassName))
+    {
+        string? contextLabel = null;
+        if (score.IsDirectClassFit)
+        {
+            contextLabel = "Valid for this class.";
+        }
+        else if (!string.IsNullOrWhiteSpace(directClassHint))
+        {
+            contextLabel = $"Conditional: valid only if your 3-class setup includes one of: {directClassHint}";
+        }
+        else
+        {
+            contextLabel = "Conditional: low-confidence class fit.";
+        }
+
+        contextualized.Add(new ClassCompositeScore(
+            score.ClassName,
+            score.QualityPercentile,
+            score.BetterItem,
+            score.IsCurrentBestInInventory,
+            contextLabel,
+            isDirectClassFit: score.IsDirectClassFit));
+    }
+
+    return contextualized;
+}
+
+static bool HasPrimaryClassStatMatch(GearRow item, string className)
+{
+    if (item.Stats is null || item.Stats.Count == 0)
+    {
+        return false;
+    }
+
+    if (!RankingProfiles.ClassStatProfiles.TryGetValue(className, out var classAxisWeights))
+    {
+        return false;
+    }
+
+    var hasStrongPrimaryStat = item.Stats.Any(stat =>
+    {
+        if (!classAxisWeights.DpsWeights.TryGetValue(stat.Key, out var dpsWeight))
+        {
+            dpsWeight = 0;
+        }
+
+        if (!classAxisWeights.SustainWeights.TryGetValue(stat.Key, out var sustainWeight))
+        {
+            sustainWeight = 0;
+        }
+
+        return (dpsWeight >= 1.0 || sustainWeight >= 1.0) && ParseStatValue(stat.Value) > 0;
+    });
+    if (hasStrongPrimaryStat)
+    {
+        return true;
+    }
+
+    if (IsCasterClass(className))
+    {
+        foreach (var statKey in item.Stats.Keys)
+        {
+            var normalized = NormalizeStatToken(statKey);
+            if (IsCasterRegenerationStat(normalized))
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+static (double BestScore, SlotFit? BestSlotFit) ResolveClassBestFit(IReadOnlyList<ClassFit> fits)
+{
+    var bestSlotScore = double.PositiveInfinity;
     SlotFit? bestSlotFit = null;
+    var bestOverallScore = double.PositiveInfinity;
+
     foreach (var fit in fits)
     {
         if (fit.OverallTotal > 0 && fit.OverallRank > 0)
         {
             var overallPercentile = (double)fit.OverallRank / fit.OverallTotal * 100.0;
-            if (overallPercentile < bestScore)
+            if (overallPercentile < bestOverallScore)
             {
-                bestScore = overallPercentile;
-                bestSlotFit = null;
+                bestOverallScore = overallPercentile;
             }
         }
 
@@ -728,50 +936,154 @@ static ClassCompositeScore? BuildClassCompositeScore(
             }
 
             var slotPercentile = (double)slot.Rank / slot.Total * 100.0;
-            if (slotPercentile < bestScore)
+            if (slotPercentile < bestSlotScore)
             {
-                bestScore = slotPercentile;
+                bestSlotScore = slotPercentile;
                 bestSlotFit = slot;
             }
         }
     }
 
-    if (double.IsPositiveInfinity(bestScore))
+    if (bestSlotScore < double.PositiveInfinity)
+    {
+        return (bestSlotScore, bestSlotFit);
+    }
+
+    return (bestOverallScore, null);
+}
+
+static bool HasBetterOwnedSlotReplacement(
+    string className,
+    string normalizedName,
+    IReadOnlyList<ClassFit> fits,
+    Dictionary<string, Dictionary<string, List<GearRow>>> slotSortedByClass,
+    IReadOnlySet<string> ownedNormalizedNames)
+{
+    if (!slotSortedByClass.TryGetValue(className, out var slotMap) || slotMap.Count == 0 || ownedNormalizedNames.Count == 0)
+    {
+        return false;
+    }
+
+    foreach (var fit in fits)
+    {
+        foreach (var slot in fit.SlotRanks)
+        {
+            var betterReplacement = TryGetBetterSlotReplacement(
+                className,
+                normalizedName,
+                slot,
+                slotSortedByClass,
+                ownedNormalizedNames,
+                out var wasCurrentItemLocated);
+
+            if (betterReplacement is not null)
+            {
+                if (IsOwnedReplacement(betterReplacement, ownedNormalizedNames))
+                {
+                    return true;
+                }
+            }
+            else if (!wasCurrentItemLocated)
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+static bool IsOwnedReplacement(string replacementText, IReadOnlySet<string> ownedNormalizedNames)
+{
+    var replacementName = ExtractReplacementName(replacementText);
+    return IsOwnedItemInSet(replacementName, ownedNormalizedNames);
+}
+
+static string? TryGetBetterWeaponReplacement(
+    string normalizedWeaponName,
+    string slotKey,
+    Dictionary<string, List<WeaponMatch>> weaponRankingsBySlot,
+    IReadOnlySet<string> ownedNormalizedNames,
+    out bool currentWeaponLocatedInRanking)
+{
+    if (!weaponRankingsBySlot.TryGetValue(slotKey, out var slotRows) || slotRows.Count == 0)
+    {
+        currentWeaponLocatedInRanking = false;
+        return null;
+    }
+
+    var currentIndex = FindWeaponRank(slotRows, normalizedWeaponName, StringComparer.OrdinalIgnoreCase);
+    if (currentIndex <= 1)
+    {
+        currentWeaponLocatedInRanking = currentIndex > 0;
+        return null;
+    }
+
+    currentWeaponLocatedInRanking = true;
+    for (var index = currentIndex - 2; index >= 0; index--)
+    {
+        var candidate = slotRows[index];
+        if (IsQuestRewardWeapon(candidate))
+        {
+            continue;
+        }
+
+        if (!IsOwnedItemInSet(candidate.NormalizedName, ownedNormalizedNames))
+        {
+            continue;
+        }
+
+        var source = GetItemSourceSummaryFromWeapon(candidate);
+        var sourceText = string.IsNullOrWhiteSpace(source) ? "source unknown" : source;
+        return $"{candidate.Row.WeaponName} (Source: {sourceText})";
+    }
+
+    return null;
+}
+
+static string? ExtractReplacementName(string replacementText)
+{
+    if (string.IsNullOrWhiteSpace(replacementText))
     {
         return null;
     }
 
-    string? betterItem = null;
-    if (bestSlotFit is not null)
+    var marker = " (Source:";
+    var markerIndex = replacementText.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+    if (markerIndex < 0)
     {
-        betterItem = TryGetBetterSlotReplacement(
-            className,
-            normalizedName,
-            bestSlotFit,
-            slotSortedByClass);
+        return replacementText.Trim();
     }
 
-    return new ClassCompositeScore(className, bestScore, betterItem);
+    return replacementText[..markerIndex].Trim();
+}
+
+static HashSet<string> BuildOwnedItemNameSet(IReadOnlyList<InventoryDumpEntry> entries)
+{
+    var ownedNormalizedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    foreach (var entry in entries)
+    {
+        var normalizedName = NormalizeQuery(entry.Name);
+        if (!string.IsNullOrWhiteSpace(normalizedName))
+        {
+            ownedNormalizedNames.Add(normalizedName);
+        }
+    }
+
+    return ownedNormalizedNames;
 }
 
 static double CalculateCompositeItemPercentile(MatchReport report)
 {
-    var bestOverallPercentile = report.MatchesByClass.Values
-        .SelectMany(values => values)
-        .Where(fit => fit.OverallTotal > 0 && fit.OverallRank > 0)
-        .Select(fit => (double)fit.OverallRank / fit.OverallTotal * 100)
+    var bestClassPercentiles = report.MatchesByClass
+        .Values
+        .Select(fits => ResolveClassBestFit(fits).BestScore)
+        .Where(score => score < double.PositiveInfinity)
         .ToList();
 
-    var bestSlotPercentiles = report.MatchesByClass.Values
-        .SelectMany(values => values)
-        .SelectMany(fit => fit.SlotRanks)
-        .Where(slot => slot.Total > 0 && slot.Rank > 0)
-        .Select(slot => (double)slot.Rank / slot.Total * 100)
-        .ToList();
-
-    return bestSlotPercentiles.Count > 0
-        ? bestSlotPercentiles.Min()
-        : bestOverallPercentile.DefaultIfEmpty(100).Min();
+    return bestClassPercentiles.Count > 0
+        ? bestClassPercentiles.Min()
+        : 100;
 }
 
 static string GetItemQualityLabel(double qualityPercentile)
@@ -845,11 +1157,21 @@ static async Task<List<ItemLookupMatchSummary>> AnalyzeInventoryDumpAsync(
         return new List<ItemLookupMatchSummary>();
     }
 
+    var ownedNormalizedNames = BuildOwnedItemNameSet(entries);
+
     var allWeaponRows = await LoadAllWeaponRowsAsync(httpClient, jsonOptions);
+    var weaponRankingBySlot = BuildWeaponRankingBySlot(allWeaponRows);
     var summaries = new List<ItemLookupMatchSummary>(entries.Count);
     foreach (var entry in entries)
     {
-        var summary = BuildInventoryItemSummary(entry, classRows, sortedByClass, slotSortedByClass, allWeaponRows);
+        var summary = BuildInventoryItemSummary(
+            entry,
+            classRows,
+            sortedByClass,
+            slotSortedByClass,
+            allWeaponRows,
+            weaponRankingBySlot,
+            ownedNormalizedNames);
         if (summary is not null)
         {
             summaries.Add(summary);
@@ -867,7 +1189,9 @@ static ItemLookupMatchSummary? BuildInventoryItemSummary(
     Dictionary<string, List<GearRow>> classRows,
     Dictionary<string, List<GearRow>> sortedByClass,
     Dictionary<string, Dictionary<string, List<GearRow>>> slotSortedByClass,
-    IReadOnlyList<WeaponRowResponse> allWeaponRows)
+    IReadOnlyList<WeaponRowResponse> allWeaponRows,
+    Dictionary<string, List<WeaponMatch>> weaponRankingBySlot,
+    HashSet<string> ownedNormalizedNames)
 {
     var normalizedName = NormalizeQuery(entry.Name);
     if (string.IsNullOrWhiteSpace(normalizedName))
@@ -884,7 +1208,7 @@ static ItemLookupMatchSummary? BuildInventoryItemSummary(
 
     if (report is not null && HasGearSlotMatch(report))
     {
-        return BuildInventoryGearSummary(entry, report, slotSortedByClass);
+        return BuildInventoryGearSummary(entry, report, slotSortedByClass, ownedNormalizedNames);
     }
 
     var weaponCandidates = FindWeaponMatchesAsync(normalizedName, allWeaponRows);
@@ -901,7 +1225,7 @@ static ItemLookupMatchSummary? BuildInventoryItemSummary(
 
     if (weaponMatch is not null)
     {
-        return BuildInventoryWeaponSummary(entry, weaponMatch);
+        return BuildInventoryWeaponSummary(entry, weaponMatch, weaponRankingBySlot, ownedNormalizedNames);
     }
 
     if (IsLikelyEquippedSlotLocation(entry.Location))
@@ -1151,9 +1475,10 @@ static bool IsLikelyEquippedSlotLocation(string location)
 static ItemLookupMatchSummary BuildInventoryGearSummary(
     InventoryDumpEntry entry,
     MatchReport report,
-    Dictionary<string, Dictionary<string, List<GearRow>>> slotSortedByClass)
+    Dictionary<string, Dictionary<string, List<GearRow>>> slotSortedByClass,
+    HashSet<string> ownedNormalizedNames)
 {
-    var baseSummary = BuildItemLookupMatchSummary(report, slotSortedByClass);
+    var baseSummary = BuildItemLookupMatchSummary(report, slotSortedByClass, ownedNormalizedNames);
     var summaryLines = BuildInventoryContextLines(entry);
     summaryLines.AddRange(baseSummary.ClassSummaryLines);
 
@@ -1172,16 +1497,18 @@ static ItemLookupMatchSummary BuildInventoryGearSummary(
 
 static ItemLookupMatchSummary BuildInventoryWeaponSummary(
     InventoryDumpEntry entry,
-    WeaponMatch weaponMatch)
+    WeaponMatch weaponMatch,
+    Dictionary<string, List<WeaponMatch>> weaponRankingsBySlot,
+    HashSet<string> ownedNormalizedNames)
 {
     var row = weaponMatch.Row;
+    var slot = row.SlotDisplay ?? row.Slot ?? "Unknown";
     var percentile = weaponMatch.DpsTotal > 0 && weaponMatch.DpsRank > 0
         ? (double)weaponMatch.DpsRank / weaponMatch.DpsTotal * 100.0
         : 100.0;
 
     var classSummaryLines = BuildInventoryContextLines(entry);
     classSummaryLines.Add($"Weapon: {row.WeaponName}");
-    var slot = row.SlotDisplay ?? row.Slot ?? "Unknown";
     classSummaryLines.Add($"Slot: {slot}");
     classSummaryLines.Add($"Weapon rank: {weaponMatch.DpsRank}/{weaponMatch.DpsTotal}");
     var source = GetItemSourceSummaryFromWeapon(weaponMatch);
@@ -1206,6 +1533,24 @@ static ItemLookupMatchSummary BuildInventoryWeaponSummary(
         notableStats.Add($"DPS {row.Dps:0.0000}");
     }
 
+    var betterWeapon = TryGetBetterWeaponReplacement(
+        weaponMatch.NormalizedName,
+        weaponMatch.SlotKey,
+        weaponRankingsBySlot,
+        ownedNormalizedNames,
+        out var isCurrentWeaponLocatedInRanking);
+    var isCurrentBestInInventory = isCurrentWeaponLocatedInRanking && string.IsNullOrWhiteSpace(betterWeapon);
+
+    var classCompositeScores = new List<ClassCompositeScore>
+    {
+        new ClassCompositeScore(
+            $"Weapon {slot}",
+            percentile,
+            betterWeapon,
+            isCurrentBestInInventory,
+            "Weapon slot comparison")
+    };
+
     return new ItemLookupMatchSummary(
         BuildInventoryDisplayName(entry),
         slot,
@@ -1216,7 +1561,7 @@ static ItemLookupMatchSummary BuildInventoryWeaponSummary(
         GetItemQualityLabel(percentile),
         classSummaryLines,
         Array.Empty<string>(),
-        Array.Empty<ClassCompositeScore>());
+        classCompositeScores);
 }
 
 static ItemLookupMatchSummary BuildInventoryEquippableUnmatchedSummary(InventoryDumpEntry entry)
@@ -1363,33 +1708,63 @@ static string? TryGetBetterSlotReplacement(
     string className,
     string currentNormalizedName,
     SlotFit slot,
-    Dictionary<string, Dictionary<string, List<GearRow>>> slotSortedByClass)
+    Dictionary<string, Dictionary<string, List<GearRow>>> slotSortedByClass,
+    IReadOnlySet<string>? ownedNormalizedNames = null)
+{
+    return TryGetBetterSlotReplacement(
+        className,
+        currentNormalizedName,
+        slot,
+        slotSortedByClass,
+        ownedNormalizedNames,
+        out _);
+}
+
+static string? TryGetBetterSlotReplacement(
+    string className,
+    string currentNormalizedName,
+    SlotFit slot,
+    Dictionary<string, Dictionary<string, List<GearRow>>> slotSortedByClass,
+    IReadOnlySet<string>? ownedNormalizedNames,
+    out bool currentItemLocatedInSlotRanking)
 {
     if (slot.Rank <= 1)
     {
+        currentItemLocatedInSlotRanking = true;
         return null;
     }
 
     if (!slotSortedByClass.TryGetValue(className, out var slotMap))
     {
+        currentItemLocatedInSlotRanking = false;
         return null;
     }
 
     if (!slotMap.TryGetValue(slot.Slot, out var slotRows) || slotRows.Count == 0)
     {
+        currentItemLocatedInSlotRanking = false;
         return null;
     }
 
     var currentIndex = FindRank(slotRows, currentNormalizedName, StringComparer.OrdinalIgnoreCase) - 1;
     if (currentIndex <= 0)
     {
+        currentItemLocatedInSlotRanking = false;
         return null;
     }
+
+    currentItemLocatedInSlotRanking = true;
 
     for (var index = currentIndex - 1; index >= 0; index--)
     {
         var candidate = slotRows[index];
         if (IsQuestReward(candidate))
+        {
+            continue;
+        }
+
+        if (ownedNormalizedNames is not null &&
+            !IsOwnedItemInSet(NormalizeQuery(candidate.Name), ownedNormalizedNames))
         {
             continue;
         }
@@ -1400,6 +1775,40 @@ static string? TryGetBetterSlotReplacement(
     }
 
     return null;
+}
+
+static bool IsOwnedItemInSet(string normalizedName, IReadOnlySet<string> ownedNormalizedNames)
+{
+    if (string.IsNullOrWhiteSpace(normalizedName))
+    {
+        return false;
+    }
+
+    if (ownedNormalizedNames.Contains(normalizedName))
+    {
+        return true;
+    }
+
+    foreach (var owned in ownedNormalizedNames)
+    {
+        if (string.IsNullOrWhiteSpace(owned))
+        {
+            continue;
+        }
+
+        if (normalizedName.Contains(owned, StringComparison.OrdinalIgnoreCase) ||
+            owned.Contains(normalizedName, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (LevenshteinDistance(normalizedName, owned) <= 2)
+        {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 static bool IsLikelyStorageContainer(string name, int itemId)
@@ -1753,27 +2162,157 @@ static double TotalStatScore(GearRow row)
 
 static double GetClassWeightedScore(GearRow row, string className)
 {
+    const double dpsAxisWeight = 0.60;
+    const double sustainAxisWeight = 0.40;
+
     if (row.Stats is null)
     {
         return 0;
     }
 
-    if (!RankingProfiles.ClassStatWeights.TryGetValue(className, out var classWeights))
+    if (!RankingProfiles.ClassStatProfiles.TryGetValue(className, out var classAxisWeights))
     {
-        return TotalStatScore(row);
+        return GetClassAxisWeightedScore(row, className, isSustainAxis: false) * dpsAxisWeight +
+               GetClassAxisWeightedScore(row, className, isSustainAxis: true) * sustainAxisWeight;
     }
 
-    return row.Stats.Sum(stat =>
+    var dpsScore = row.Stats.Sum(stat =>
     {
         var key = stat.Key;
         var value = ParseStatValue(stat.Value);
-        if (!classWeights.TryGetValue(key, out var weight))
+        if (!classAxisWeights.DpsWeights.TryGetValue(key, out var dpsWeight))
         {
-            weight = 1.0;
+            dpsWeight = GetFallbackStatWeight(className, key, isSustainAxis: false);
         }
 
-        return value * weight;
+        return value * dpsWeight;
     });
+
+    var sustainScore = row.Stats.Sum(stat =>
+    {
+        var key = stat.Key;
+        var value = ParseStatValue(stat.Value);
+        if (!classAxisWeights.SustainWeights.TryGetValue(key, out var sustainWeight))
+        {
+            sustainWeight = GetFallbackStatWeight(className, key, isSustainAxis: true);
+        }
+
+        return value * sustainWeight;
+    });
+
+    return dpsScore * dpsAxisWeight + sustainScore * sustainAxisWeight;
+}
+
+static double GetClassAxisWeightedScore(
+    GearRow row,
+    string className,
+    bool isSustainAxis)
+{
+    if (row.Stats is null)
+    {
+        return 0;
+    }
+
+    if (!RankingProfiles.ClassStatProfiles.TryGetValue(className, out var classAxisWeights))
+    {
+        return row.Stats.Sum(stat => ParseStatValue(stat.Value) * GetFallbackStatWeight(className, stat.Key, isSustainAxis));
+    }
+
+    var weights = isSustainAxis ? classAxisWeights.SustainWeights : classAxisWeights.DpsWeights;
+    return row.Stats.Sum(stat =>
+    {
+        if (!weights.TryGetValue(stat.Key, out var weight))
+        {
+            return ParseStatValue(stat.Value) * GetFallbackStatWeight(className, stat.Key, isSustainAxis);
+        }
+
+        return ParseStatValue(stat.Value) * weight;
+    });
+}
+
+static double GetFallbackStatWeight(string className, string statKey, bool isSustainAxis)
+{
+    var normalized = NormalizeStatToken(statKey);
+    if (IsCasterClass(className))
+    {
+        if (IsCasterRegenerationStat(normalized))
+        {
+            return isSustainAxis ? 2.0 : 0.5;
+        }
+
+        if (normalized.Contains("MANA", StringComparison.Ordinal))
+        {
+            return isSustainAxis ? 1.4 : 1.3;
+        }
+
+        if (normalized.Contains("INT", StringComparison.Ordinal) || normalized.Contains("WIS", StringComparison.Ordinal))
+        {
+            return isSustainAxis ? 0.2 : 1.0;
+        }
+
+        if (ContainsAny(normalized, "HP", "HITPOINTS", "STA", "STAMINA", "END", "ENDURANCE"))
+        {
+            return isSustainAxis ? 1.2 : 0.2;
+        }
+
+        if (isSustainAxis)
+        {
+            if (ContainsAny(normalized, "AC", "ACCURACY", "EVASION"))
+            {
+                return 0.8;
+            }
+        }
+
+        return 0.0;
+    }
+
+    if (isSustainAxis)
+    {
+        if (ContainsAny(normalized, "AC", "HP", "HITPOINTS", "STA", "STAMINA", "END", "ENDURANCE"))
+        {
+            return 1.0;
+        }
+
+        return 0.0;
+    }
+
+    return normalized.Contains("STR", StringComparison.Ordinal) ||
+        normalized.Contains("AGI", StringComparison.Ordinal) ||
+        normalized.Contains("DEX", StringComparison.Ordinal) ? 1.0 : 0.0;
+}
+
+static bool IsCasterRegenerationStat(string normalizedStatKey)
+{
+    return ContainsAny(normalizedStatKey, "REGEN");
+}
+
+static bool IsCasterClass(string className)
+{
+    return className.Equals("Enchanter", StringComparison.OrdinalIgnoreCase) ||
+           className.Equals("Magician", StringComparison.OrdinalIgnoreCase) ||
+           className.Equals("Necromancer", StringComparison.OrdinalIgnoreCase) ||
+           className.Equals("Wizard", StringComparison.OrdinalIgnoreCase) ||
+           className.Equals("Cleric", StringComparison.OrdinalIgnoreCase) ||
+           className.Equals("Druid", StringComparison.OrdinalIgnoreCase) ||
+           className.Equals("Shaman", StringComparison.OrdinalIgnoreCase);
+}
+
+static bool ContainsAny(string value, params string[] fragments)
+{
+    foreach (var fragment in fragments)
+    {
+        if (value.Contains(fragment, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static string NormalizeStatToken(string statKey)
+{
+    return Regex.Replace((statKey ?? string.Empty).ToUpperInvariant(), @"[^A-Z0-9]", "", RegexOptions.Compiled);
 }
 
 static double GetStatValue(GearRow row, string key)
@@ -1818,7 +2357,7 @@ static async Task<List<WeaponRowResponse>> LoadAllWeaponRowsAsync(
     HttpClient httpClient,
     JsonSerializerOptions jsonOptions)
 {
-    var requestUrl = $"{WeaponsApiUrl}?limit=1000";
+    var requestUrl = $"{WeaponsApiUrl}?limit=5000";
     using var request = new HttpRequestMessage(HttpMethod.Get, requestUrl);
     using var response = await httpClient.SendAsync(request);
     if (!response.IsSuccessStatusCode)
@@ -1857,7 +2396,7 @@ static List<WeaponMatch> FindWeaponMatchesAsync(
         }
 
         var normalizedName = NormalizeQuery(row.WeaponName);
-        if (!normalizedName.Contains(normalizedQuery, StringComparison.OrdinalIgnoreCase))
+        if (!WeaponNameMatches(normalizedQuery, normalizedName))
         {
             continue;
         }
@@ -1907,6 +2446,37 @@ static List<WeaponMatch> FindWeaponMatchesAsync(
     }
 
     return ordered;
+}
+
+static bool WeaponNameMatches(string query, string candidate)
+{
+    if (string.IsNullOrWhiteSpace(query) || string.IsNullOrWhiteSpace(candidate))
+    {
+        return false;
+    }
+
+    if (string.Equals(query, candidate, StringComparison.OrdinalIgnoreCase))
+    {
+        return true;
+    }
+
+    if (candidate.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+        query.Contains(candidate, StringComparison.OrdinalIgnoreCase))
+    {
+        return true;
+    }
+
+    var queryTokens = GetNameTokens(query);
+    var candidateTokens = new HashSet<string>(GetNameTokens(candidate), StringComparer.OrdinalIgnoreCase);
+    return queryTokens.Count > 0 && queryTokens.All(candidateTokens.Contains);
+}
+
+static IReadOnlyList<string> GetNameTokens(string normalizedValue)
+{
+    return normalizedValue
+        .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Where(token => token.Length > 1)
+        .ToList();
 }
 
 static void PrintWeaponMatchReport(WeaponMatch match)
@@ -2192,12 +2762,21 @@ public sealed class ItemLookupMatchSummary(
     public double CompositeScore => 100.0 - QualityPercentile;
 }
 
-public sealed class ClassCompositeScore(string className, double qualityPercentile, string? betterItem)
+public sealed class ClassCompositeScore(
+    string className,
+    double qualityPercentile,
+    string? betterItem,
+    bool isCurrentBestInInventory = false,
+    string? contextLabel = null,
+    bool isDirectClassFit = false)
 {
     public string ClassName { get; } = className;
     public double QualityPercentile { get; } = qualityPercentile;
     public double CompositeScore => 100.0 - QualityPercentile;
     public string? BetterItem { get; } = betterItem;
+    public bool IsCurrentBestInInventory { get; } = isCurrentBestInInventory;
+    public string? ContextLabel { get; } = contextLabel;
+    public bool IsDirectClassFit { get; } = isDirectClassFit;
 }
 
 public sealed class InventoryDumpEntry(string location, string name, int itemId, int count, bool isKeyRing)

@@ -12,4 +12,10 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.6" />
   </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="eql-gear-helper.Tests\**\*.cs" />
+    <Compile Remove="eql-gear-helper.Tests\**\*.xaml.cs" />
+    <None Remove="eql-gear-helper.Tests\**\*" />
+  </ItemGroup>
 </Project>
