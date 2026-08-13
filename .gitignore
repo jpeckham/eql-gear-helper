@@ -421,6 +421,9 @@ FodyWeavers.xsd
 # Built Visual Studio Code Extensions
 *.vsix
 
+# Superpowers subagent orchestration artifacts
+.superpowers/
+
 # Windows Installer files from build outputs
 *.cab
 *.msi

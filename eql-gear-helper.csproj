@@ -1,21 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
-    <RootNamespace>EqlGearHelper</RootNamespace>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-    <LangVersion>preview</LangVersion>
-    <UseWPF>true</UseWPF>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <EnableDefaultPageItems>false</EnableDefaultPageItems>
+    <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.6" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Compile Remove="eql-gear-helper.Tests\**\*.cs" />
-    <Compile Remove="eql-gear-helper.Tests\**\*.xaml.cs" />
-    <None Remove="eql-gear-helper.Tests\**\*" />
+    <ProjectReference Include="src\EqlGearHelper.Wpf\EqlGearHelper.Wpf.csproj" />
   </ItemGroup>
 </Project>

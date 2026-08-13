@@ -283,6 +283,8 @@ As observed on August 9, 2026, the site provides tri-class gear search, slot fil
 
 No documented public API or complete downloadable catalog has yet been confirmed. Programmatic access, item-ID availability, source permission, and rate limits remain a required technical and product-data discovery item.
 
+The EQ Legends Tools Character Sheet implementation was inspected on August 10, 2026. Its browser bundle loads curated planner data from the first-party `/api/char-sheet-data` endpoint, imports the same local `/outputfile inventory` file, applies a weighted item-score algorithm for a selected tri-class and favored stats, and supports local JSON profile backup/export. Direct requests to that endpoint are rejected as available only to the EQ Legends Tools site. This endpoint is therefore **not** a public catalog API and must not be scraped, mirrored, or used as an application data dependency without explicit permission from its operator.
+
 ### 11.3 Source-of-truth hierarchy
 
 Until a formal source agreement exists, the application should use this hierarchy:
@@ -293,6 +295,23 @@ Until a formal source agreement exists, the application should use this hierarch
 4. **User overrides** are authoritative only for the user's local analysis and must be visibly marked.
 
 The application must never infer that an item still contains its catalog-native Exaltation when the imported socket row is empty.
+
+### 11.4 Permitted catalog compilation and provenance
+
+The product may compile a normalized, portable local catalog package from one or more external data sources when all of the following conditions hold:
+
+1. The source's license, terms, or written permission permits the intended retrieval, normalization, local storage, and derivative catalog use.
+2. The compiler observes the source's published access controls, robots policy, authentication boundary, and rate limits. A first-party endpoint restricted to its own site is not permission to access or reuse its data.
+3. Each compiled package records a provenance manifest containing source name, canonical URL, permission or license basis, retrieval timestamp, source version when available, content hash, compiler/parser version, and completeness/confidence notes.
+4. Raw source payloads are not redistributed or bundled unless their license or permission explicitly permits redistribution. The portable package contains only the normalized facts allowed by that permission and required by this product.
+5. Failed, incomplete, ambiguous, or unlicensed source records remain visible as unresolved data; they must not become confident disposal recommendations.
+
+The application shall support two distinct acquisition modes:
+
+- **User-provided catalog package:** an offline package the user has the right to import. The application validates its manifest and preserves the declared provenance.
+- **Authorized compiler source:** a configured source with an explicit permission basis. Compilation is reproducible, rate-limited, auditable, and produces the same portable package format as user-provided import.
+
+This policy permits a future compiler comparable in architecture to a curated character-sheet planner, but does not authorize copying EQ Legends Tools' internal dataset or bypassing its endpoint restrictions.
 
 ---
 
@@ -997,11 +1016,12 @@ Must show:
 | FR-CAT-003 | P0 | When an external source lacks a usable item ID, the application shall support normalized-name matching and a persistent alias/mapping resolution. |
 | FR-CAT-004 | P0 | Catalog synchronization shall be independent of player inventory import. |
 | FR-CAT-005 | P0 | The application shall display catalog source, version, retrieval date, and completeness. |
-| FR-CAT-006 | P0 | The application shall preserve source attribution and comply with source permission and rate-limit requirements. |
+| FR-CAT-006 | P0 | The application shall preserve source attribution and comply with source permission, access-boundary, robots-policy, and rate-limit requirements. |
 | FR-CAT-007 | P0 | The application shall cache normalized data locally so core analysis works offline after synchronization. |
 | FR-CAT-008 | P0 | Unknown catalog items or effects shall be visible and shall block confident disposal recommendations for affected assets. |
 | FR-CAT-009 | P1 | The application shall support importing and exporting a portable catalog package. |
 | FR-CAT-010 | P1 | The application shall show catalog changes that could alter prior analysis results. |
+| FR-CAT-011 | P1 | The application shall support reproducible compilation of a portable catalog package from an authorized source, recording the provenance manifest defined in Section 11.4. |
 
 ### 20.2 Required catalog item data
 
@@ -1981,4 +2001,3 @@ The release is done when:
 - `assets/cleanup-items-keep-or-toss.png` — Cleanup UX concept.
 - `assets/build-planner.png` — Build Planner UX concept.
 - `samples/Parnell_oggok-Inventory.txt` — Real inventory-output fixture used to validate parsing and installed Exaltation visibility.
-

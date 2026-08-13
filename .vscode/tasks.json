@@ -6,7 +6,8 @@
       "command": "dotnet",
       "type": "process",
       "args": [
-        "build"
+        "build",
+        "src/EqlGearHelper.Wpf/EqlGearHelper.Wpf.csproj"
       ],
       "group": {
         "kind": "build",

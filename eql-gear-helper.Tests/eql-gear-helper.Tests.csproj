@@ -19,7 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\eql-gear-helper.csproj" />
+    <ProjectReference Include="..\src\EqlGearHelper.Wpf\EqlGearHelper.Wpf.csproj" />
   </ItemGroup>
 
   <ItemGroup>

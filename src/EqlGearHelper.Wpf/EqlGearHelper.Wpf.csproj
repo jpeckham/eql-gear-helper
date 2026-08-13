@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RootNamespace>EqlGearHelper</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>preview</LangVersion>
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\EqlGearHelper.Application\EqlGearHelper.Application.csproj" />
+  </ItemGroup>
+
+  <Target Name="CopyInfrastructureForLocalComposition" AfterTargets="Build">
+    <MSBuild Projects="..\EqlGearHelper.Infrastructure\EqlGearHelper.Infrastructure.csproj" Targets="Build" Properties="Configuration=$(Configuration)" />
+    <ItemGroup>
+      <InfrastructureOutput Include="..\EqlGearHelper.Infrastructure\bin\$(Configuration)\net8.0\**\*"
+                            Exclude="..\EqlGearHelper.Infrastructure\bin\$(Configuration)\net8.0\runtimes\**\*" />
+      <InfrastructureNativeOutput Include="..\EqlGearHelper.Infrastructure\bin\$(Configuration)\net8.0\runtimes\win-x64\native\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(InfrastructureOutput)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(InfrastructureNativeOutput)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+  <ItemGroup>
+    <None Update="Cache\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\docs\prompts\EQL_Gear_Analyzer_PRD_UX_Package\eql-gear-analyzer-prd\samples\Parnell_oggok-Inventory.txt"
+                      LogicalName="EqlGearHelper.Wpf.Samples.Parnell_oggok-Inventory.txt" />
+  </ItemGroup>
+</Project>
